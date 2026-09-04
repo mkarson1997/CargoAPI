@@ -1,212 +1,205 @@
-# Cargo Carrier Selection API
+# CargoAPI
 
-Sipariş oluşturulurken girilen desi bilgisine göre en uygun kargo firmasını otomatik seçen .NET 6 Web API projesidir.
+[![CI](https://github.com/mkarson1997/CargoAPI/actions/workflows/ci.yml/badge.svg)](https://github.com/mkarson1997/CargoAPI/actions/workflows/ci.yml)
 
-## Kullanılan Teknolojiler
+A layered .NET Web API that selects the most cost-effective cargo carrier for an order based on dimensional-weight rules, persists operational data, and generates recurring daily carrier-cost reports in the background.
 
-- .NET 6 Web API
-- Entity Framework Core 6 (Code First)
-- Microsoft SQL Server (LocalDB / Express / Full)
-- Swagger (Swashbuckle)
-- Hangfire (Background Jobs)
-- Repository Pattern
-- N-Tier Architecture
+This repository is designed as a backend engineering case study: business rules live outside controllers, persistence is isolated behind a data-access layer, validation protects domain invariants, and Hangfire handles recurring reporting work.
 
-## Mimari
+## Engineering highlights
 
+- N-tier architecture with API, Business, DataAccess and Entities projects
+- Carrier selection based on configurable desi ranges and pricing rules
+- Entity Framework Core with SQL Server and Code First migrations
+- Hangfire recurring background jobs and dashboard
+- Idempotent-style daily carrier report upsert flow
+- Swagger/OpenAPI development interface
+- Global exception handling with safe JSON error responses
+- Validation for names, dimensions and pricing values
+- SQL bootstrap script for local environments
+- Automated GitHub Actions build validation
+- Security and contribution documentation
+
+## Architecture
+
+```text
+Client
+  │
+  ▼
+CargoAPI.API
+  │  HTTP / validation / middleware / Swagger
+  ▼
+CargoAPI.Business
+  │  application and carrier-selection rules
+  ▼
+CargoAPI.DataAccess
+  │  EF Core repositories / DbContext / migrations
+  ▼
+CargoAPI.Entities
+     entities and DTOs
+
+SQL Server ◄──── EF Core
+Hangfire   ◄──── recurring reporting jobs
 ```
+
+Repository layout:
+
+```text
 CargoAPI.sln
-├── CargoAPI.API              → Controller'lar, Program.cs, Swagger
-├── CargoAPI.Business         → Servis arayüzleri ve iş mantığı
-├── CargoAPI.DataAccess       → DbContext, Repository'ler, Migration'lar
-└── CargoAPI.Entities         → Entity sınıfları, DTO'lar
+├── CargoAPI.API
+├── CargoAPI.Business
+├── CargoAPI.DataAccess
+├── CargoAPI.Entities
+├── database/
+├── .github/workflows/ci.yml
+├── SECURITY.md
+└── CONTRIBUTING.md
 ```
 
-**Referans zinciri:** API → Business → DataAccess → Entities
+## Core business rule
 
-## Gereksinimler
+When an order is created, the API receives `orderDesi` and evaluates active carrier configurations.
 
-- [.NET 6 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/6.0) (x64 önerilir)
-- SQL Server (LocalDB, Express veya Full)
-- dotnet-ef CLI aracı
+### Case 1: desi is inside a configured range
 
-dotnet-ef kurulumu:
+The system selects the lowest-priced eligible carrier configuration.
+
+### Case 2: desi is outside every configured range
+
+The closest configured `MaxDesi` is used as the base and the extra-desi cost is applied:
+
+```text
+finalPrice = carrierPrice + (carrierPlusDesiCost × difference)
+```
+
+Example:
+
+```text
+Order desi:           13
+Configured max desi:  10
+Base carrier price:   32 TRY
+Extra desi price:      4 TRY
+
+32 + (4 × 3) = 44 TRY
+```
+
+## Background reporting
+
+Hangfire runs the `carrier-reports` recurring job every hour.
+
+The job:
+
+1. reads orders,
+2. groups them by carrier and calendar date,
+3. aggregates `OrderCarrierCost`,
+4. updates an existing report or creates a new one.
+
+This keeps reporting work outside the request/response path and demonstrates a background-processing workflow.
+
+## API surface
+
+### Carriers
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/Carriers` | List carriers |
+| `POST` | `/api/Carriers` | Create a carrier |
+| `PUT` | `/api/Carriers` | Update a carrier |
+| `DELETE` | `/api/Carriers/{id}` | Delete a carrier |
+
+### Carrier configurations
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/CarrierConfigurations` | List pricing configurations |
+| `POST` | `/api/CarrierConfigurations` | Create a configuration |
+| `PUT` | `/api/CarrierConfigurations` | Update a configuration |
+| `DELETE` | `/api/CarrierConfigurations/{id}` | Delete a configuration |
+
+### Orders
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/Orders` | List orders |
+| `POST` | `/api/Orders` | Create an order and select its carrier |
+| `DELETE` | `/api/Orders/{id}` | Delete an order |
+
+### Reports
+
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/api/CarrierReports` | List carrier reports |
+| `POST` | `/api/CarrierReports/generate` | Trigger report generation manually |
+
+## Quick start
+
+### Requirements
+
+- .NET 6 SDK
+- SQL Server LocalDB, Express or full SQL Server
+- `dotnet-ef`
+
+Install EF tooling:
 
 ```bash
 dotnet tool install --global dotnet-ef
 ```
 
-## Veritabanı Tabloları
+### Configure the database
 
-| Tablo | Açıklama |
-|---|---|
-| Carriers | Kargo firmaları |
-| CarrierConfigurations | Kargo firma konfigürasyonları (desi aralıkları ve fiyatlar) |
-| Orders | Siparişler |
-| CarrierReports | Kargo firması günlük maliyet raporları |
-| Hangfire tables | Hangfire job storage (State, Job, Server, etc.) |
+Set `DefaultConnection` in `CargoAPI.API/appsettings.json` for your environment.
 
-## Kurulum
+Example LocalDB configuration:
 
-### 1. Bağlantı Dizesini Ayarlayın
-
-`CargoAPI.API/appsettings.json` dosyasındaki bağlantı dizesini kendi ortamınıza göre güncelleyin:
-
-**LocalDB (Visual Studio ile birlikte gelir):**
 ```json
-"ConnectionStrings": {
-  "DefaultConnection": "Server=(localdb)\\MSSQLLocalDB;Database=CargoDb;Trusted_Connection=True;TrustServerCertificate=True;"
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=(localdb)\\MSSQLLocalDB;Database=CargoDb;Trusted_Connection=True;TrustServerCertificate=True;"
+  }
 }
 ```
 
-**SQL Server Express:**
-```json
-"ConnectionStrings": {
-  "DefaultConnection": "Server=.\\SQLEXPRESS;Database=CargoDb;Trusted_Connection=True;TrustServerCertificate=True;"
-}
-```
-
-**SQL Server (varsayılan instance):**
-```json
-"ConnectionStrings": {
-  "DefaultConnection": "Server=.;Database=CargoDb;Trusted_Connection=True;TrustServerCertificate=True;"
-}
-```
-
-### 2. Migration Oluşturun ve Veritabanını Güncelleyin
-
-**Seçenek A: EF Core Migrations kullanın**
+Apply migrations:
 
 ```bash
-dotnet ef migrations add InitialCreate --project CargoAPI.DataAccess --startup-project CargoAPI.API
-dotnet ef database update --project CargoAPI.DataAccess --startup-project CargoAPI.API
+dotnet ef database update \
+  --project CargoAPI.DataAccess \
+  --startup-project CargoAPI.API
 ```
 
-**Seçenek B: SQL Script kullanın**
-
-`database/CargoDb_Create.sql` dosyası tüm migration'ları içeren idempotent bir scripttir. SQL Server Management Studio (SSMS) veya sqlcmd ile çalıştırabilirsiniz:
+Or use the idempotent SQL bootstrap script:
 
 ```bash
 sqlcmd -S "(localdb)\MSSQLLocalDB" -i database/CargoDb_Create.sql
 ```
 
-> **Not:** Hangfire kendi iç tablolarını (Hangfire.State, Hangfire.Job, vb.) uygulama ilk çalıştığında otomatik olarak oluşturur. Bu tablolar SQL script'te yer almaz.
-
-### 3. Projeyi Çalıştırın
+Run the API:
 
 ```bash
 dotnet run --project CargoAPI.API
 ```
 
-Swagger arayüzü: **http://localhost:5246/swagger**
+Development interfaces:
 
-> **Sorun giderme:** .NET 6 SDK yerine daha yeni bir SDK kullanıyorsanız ve runtime hatası alırsanız, komutların başına `DOTNET_ROLL_FORWARD=LatestMajor` ekleyebilirsiniz. Ancak önerilen yöntem .NET 6 SDK'yı yüklemektir.
-
-## Hangfire Kurulumu ve Çalıştırma
-
-Bu projede Hangfire, bonus geliştirme kapsamında arka plan işlerini yönetmek için kullanılmıştır.
-
-### Kurulum
-
-Hangfire için manuel bir kurulum adımı gerekmez. Gerekli NuGet paketleri proje içerisinde tanımlıdır:
-
-- `Hangfire.AspNetCore`
-- `Hangfire.SqlServer`
-
-Uygulama çalıştırıldığında, Hangfire otomatik olarak aynı MSSQL / LocalDB veritabanına bağlanır ve kendi iç tablolarını (Hangfire.State, Hangfire.Job, vb.) ilk çalıştırmada otomatik olarak oluşturur.
-
-### Dashboard
-
-Hangfire Dashboard, arka plan işlerini izlemek ve yönetmek için kullanılır.
-
-**URL:** http://localhost:5246/hangfire
-
-Dashboard üzerinden:
-- Recurring jobs (saatlik rapor job'u)
-- Job history ve status
-- Failed jobs ve retry işlemleri
-- Server status
-
-gibi bilgileri görebilirsiniz.
-
-### Recurring Job: carrier-reports
-
-**Job adı:** `carrier-reports`
-
-**Çalışma sıklığı:** Her saat başı
-
-**İşlem adımları:**
-1. Tüm siparişleri okur
-2. Siparişleri `CarrierId` ve `OrderDate.Date` alanlarına göre gruplar
-3. Her grup için `OrderCarrierCost` değerlerini toplar
-4. `CarrierReports` tablosunda aynı `CarrierId` ve tarih için rapor varsa günceller, yoksa yeni kayıt ekler (upsert)
-
-**Manuel tetikleme endpoint'i:**
-```
-POST /api/CarrierReports/generate
+```text
+Swagger:  http://localhost:5246/swagger
+Hangfire: http://localhost:5246/hangfire
 ```
 
-**Raporları listeleme endpoint'i:**
-```
-GET /api/CarrierReports
-```
+## Example workflow
 
-**Örnek hesaplama:**
-- Sipariş 1: `orderDesi: 5` → 32.00₺
-- Sipariş 2: `orderDesi: 13` → 44.00₺
-- Toplam rapor maliyeti: **76.00₺**
-
-## API Endpoints
-
-### Kargo Firmaları
-
-| Metot | Route | Açıklama |
-|---|---|---|
-| GET | /api/Carriers | Tüm kargo firmalarını listele |
-| POST | /api/Carriers | Kargo firması ekle |
-| PUT | /api/Carriers | Kargo firması güncelle |
-| DELETE | /api/Carriers/{id} | Kargo firması sil |
-
-### Kargo Firma Konfigürasyonları
-
-| Metot | Route | Açıklama |
-|---|---|---|
-| GET | /api/CarrierConfigurations | Tüm konfigürasyonları listele |
-| POST | /api/CarrierConfigurations | Konfigürasyon ekle |
-| PUT | /api/CarrierConfigurations | Konfigürasyon güncelle |
-| DELETE | /api/CarrierConfigurations/{id} | Konfigürasyon sil |
-
-### Siparişler
-
-| Metot | Route | Açıklama |
-|---|---|---|
-| GET | /api/Orders | Tüm siparişleri listele |
-| POST | /api/Orders | Sipariş oluştur (desi gönderilir, kargo otomatik seçilir) |
-| DELETE | /api/Orders/{id} | Sipariş sil |
-
-### Kargo Raporları (Hangfire)
-
-| Metot | Route | Açıklama |
-|---|---|---|
-| GET | /api/CarrierReports | Tüm kargo raporlarını listele |
-| POST | /api/CarrierReports/generate | Raporları manuel olarak oluştur/trigger et |
-
-## Swagger Test Sırası ve Örnek JSON'lar
-
-Aşağıdaki sırayla test edin:
-
-### 1. Kargo Firması Ekle (POST /api/Carriers)
+Create a carrier:
 
 ```json
 {
-  "carrierName": "Yurtiçi Kargo",
+  "carrierName": "Yurtici Kargo",
   "carrierIsActive": true,
   "carrierPlusDesiCost": 4,
   "carrierConfigurationId": 0
 }
 ```
 
-### 2. Konfigürasyon Ekle (POST /api/CarrierConfigurations)
+Create a pricing configuration:
 
 ```json
 {
@@ -217,17 +210,7 @@ Aşağıdaki sırayla test edin:
 }
 ```
 
-### 3. Sipariş Ekle — Desi Aralık İçinde (POST /api/Orders)
-
-```json
-{
-  "orderDesi": 5
-}
-```
-
-**Beklenen sonuç:** `"Sipariş eklendi. Kargo ücreti: 32.00₺"` (5 desisi 1–10 aralığında)
-
-### 4. Sipariş Ekle — Desi Aralık Dışında (POST /api/Orders)
+Create an order:
 
 ```json
 {
@@ -235,105 +218,49 @@ Aşağıdaki sırayla test edin:
 }
 ```
 
-**Beklenen sonuç:** `"Sipariş eklendi. Kargo ücreti: 44₺"` (32 + 4 × 3 = 44)
+For the example configuration above, the calculated carrier cost is `44 TRY`.
 
-### 5. Siparişleri Listele (GET /api/Orders)
+## Validation and failure handling
 
-Her iki siparişi de `carrierId` ve `orderCarrierCost` alanlarıyla birlikte gösterir.
+The application validates key business inputs such as:
 
-### 6. Raporları Oluştur (POST /api/CarrierReports/generate)
+- non-empty carrier names,
+- positive order desi,
+- valid min/max desi ranges,
+- non-negative extra-desi cost,
+- positive carrier configuration prices.
 
-Siparişler üzerinden kargo başına günlük toplam maliyet raporlarını oluşturur.
+Unhandled failures pass through global exception middleware so the API returns a consistent response without exposing a server stack trace.
 
-**Çalışma mantığı:**
-- Tüm siparişleri okur
-- Siparişleri CarrierId ve OrderDate.Date'e göre gruplar
-- Her grup için OrderCarrierCost toplamını hesaplar
-- Aynı CarrierId ve tarih için rapor varsa günceller, yoksa yeni oluşturur (upsert)
+## CI
 
-### 7. Raporları Listele (GET /api/CarrierReports)
+Every push and pull request to `main` runs:
 
-Oluşturulan raporları listeler. Örnek çıktı:
-
-```json
-[
-  {
-    "carrierReportId": 1,
-    "carrierId": 1,
-    "carrierCost": 76.00,
-    "carrierReportDate": "2026-04-29T00:00:00"
-  }
-]
+```bash
+dotnet restore CargoAPI.sln
+dotnet build CargoAPI.sln --configuration Release --no-restore
 ```
 
-Anlamı: "29 Nisan 2026 tarihinde, 1 numaralı kargo firmasına toplam 76.00₺ ödeme yapılmıştır."
+See `.github/workflows/ci.yml`.
 
-## Otomatik Rapor Job'u
+## Engineering roadmap
 
-Hangfire recurring job her saat başı otomatik olarak raporları günceller. Job:
-- Siparişleri okur
-- Günlük kargo başına toplam maliyetleri hesaplar
-- CarrierReports tablosuna kaydeder/günceller
+- Add unit tests for carrier-selection edge cases
+- Add integration tests for order and report endpoints
+- Add Docker-based SQL Server development environment
+- Move API contracts toward explicit request/response DTOs where needed
+- Upgrade the runtime from .NET 6 to a currently supported LTS target
+- Add authentication/authorization before any internet-facing deployment
+- Add structured logging and request correlation
 
-## Kargo Ücreti Hesaplama Mantığı
+## Security
 
-### Durum 1: Desi bir aralığın içinde
+This repository is a portfolio/reference project and should not be exposed to the public internet without deployment hardening and authentication. See [SECURITY.md](SECURITY.md) for vulnerability reporting guidance.
 
-Sipariş desisi herhangi bir konfigürasyonun MinDesi–MaxDesi aralığına giriyorsa, bu aralıktaki **en düşük fiyatlı** kargo firması seçilir.
+## Contributing
 
-### Durum 2: Desi hiçbir aralığın içinde değil
-
-1. Tüm aktif konfigürasyonlar arasından sipariş desisine **en yakın MaxDesi** değerine sahip olan bulunur.
-2. Desi farkı hesaplanır: `fark = |siparişDesi - maxDesi|`
-3. Ek maliyet hesaplanır: `sonFiyat = kargoFiyatı + (plusDesiÜcreti × fark)`
-
-**Örnek:**
-
-```
-Sipariş Desisi: 13
-Konfigürasyon MaxDesi: 10
-Kargo Fiyatı: 32₺
-+1 Desi Fiyatı: 4₺
-
-Hesaplama: 32 + (4 × (13 - 10)) = 32 + 12 = 44₺
-```
-
-## Validasyon Kuralları
-
-| Alan | Kural |
-|---|---|
-| CarrierName | Boş olamaz |
-| CarrierPlusDesiCost | 0 veya daha büyük olmalı |
-| CarrierMinDesi | 0'dan büyük olmalı |
-| CarrierMaxDesi | CarrierMinDesi'den küçük olamaz |
-| CarrierCost | 0'dan büyük olmalı |
-| OrderDesi | 0'dan büyük olmalı |
-
-Geçersiz istek gönderildiğinde API **400 Bad Request** ile hata mesajı döner.
-
-## Hata Yönetimi ve Logging
-
-### Global Exception Middleware
-
-Uygulamada beklenmeyen hataları yakalamak için global exception middleware kullanılmıştır. Bu yapı sayesinde kontrol edilmeyen hatalarda API tutarlı bir JSON yanıtı döndürür ve hassas stack trace bilgileri dışarıya açılmaz.
-
-
-Örnek hata yanıtı:
-
-```json
-{
-  "statusCode": 500,
-  "message": "Beklenmeyen bir hata oluştu."
-}
-```
-
-sqllocaldb start MSSQLLocalDB
-sqllocaldb info MSSQLLocalDB
-dotnet run --project CargoAPI.API
-
-dotnet ef database update --project CargoAPI.DataAccess --startup-project CargoAPI.API
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-
-**Bu proje Mahmoud Karzoun tarafından tasarlanmış ve geliştirilmiştir.**
+Built and maintained by [Mahmoud Karzoun](https://github.com/mkarson1997).
