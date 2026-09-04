@@ -4,7 +4,9 @@
 
 A layered .NET Web API that selects the most cost-effective cargo carrier for an order based on dimensional-weight rules, persists operational data, and generates recurring daily carrier-cost reports in the background.
 
-This repository is designed as a backend engineering case study: business rules live outside controllers, persistence is isolated behind a data-access layer, validation protects domain invariants, and Hangfire handles recurring reporting work.
+This repository is maintained as a backend engineering case study: business rules live outside controllers, persistence is isolated behind repositories, validation protects domain invariants, Hangfire handles recurring work, and automated tests protect core pricing behavior.
+
+> **Runtime note:** the current code targets .NET 6. A tracked portfolio-hardening issue covers migration to a supported LTS runtime and containerized local development.
 
 ## Engineering highlights
 
@@ -15,10 +17,11 @@ This repository is designed as a backend engineering case study: business rules 
 - Idempotent-style daily carrier report upsert flow
 - Swagger/OpenAPI development interface
 - Global exception handling with safe JSON error responses
-- Validation for names, dimensions and pricing values
-- SQL bootstrap script for local environments
-- Automated GitHub Actions build validation
-- Security and contribution documentation
+- Input validation for names, dimensions and pricing values
+- Automated xUnit tests for core `OrderService` behavior
+- Moq-based dependency isolation in business-layer tests
+- GitHub Actions build + unit-test validation
+- Security, contribution and pull-request documentation
 
 ## Architecture
 
@@ -50,7 +53,9 @@ CargoAPI.sln
 ├── CargoAPI.Business
 ├── CargoAPI.DataAccess
 ├── CargoAPI.Entities
+├── CargoAPI.Tests
 ├── database/
+├── docs/
 ├── .github/workflows/ci.yml
 ├── SECURITY.md
 └── CONTRIBUTING.md
@@ -66,7 +71,7 @@ The system selects the lowest-priced eligible carrier configuration.
 
 ### Case 2: desi is outside every configured range
 
-The closest configured `MaxDesi` is used as the base and the extra-desi cost is applied:
+The current implementation chooses the configuration whose `CarrierMaxDesi` is closest and applies the extra-desi calculation:
 
 ```text
 finalPrice = carrierPrice + (carrierPlusDesiCost × difference)
@@ -82,6 +87,8 @@ Extra desi price:      4 TRY
 
 32 + (4 × 3) = 44 TRY
 ```
+
+The behavior for orders below every configured range and for gaps between ranges is intentionally tracked as an explicit domain-rule decision before changing production behavior.
 
 ## Background reporting
 
@@ -131,11 +138,29 @@ This keeps reporting work outside the request/response path and demonstrates a b
 | `GET` | `/api/CarrierReports` | List carrier reports |
 | `POST` | `/api/CarrierReports/generate` | Trigger report generation manually |
 
+## Automated tests
+
+The `CargoAPI.Tests` project currently protects the most important `OrderService` behaviors:
+
+- non-positive desi is rejected without persistence,
+- the cheapest carrier is selected when multiple ranges match,
+- extra-desi pricing is calculated for the documented above-range case,
+- no order is persisted when no carrier configuration exists.
+
+Run the suite:
+
+```bash
+dotnet restore CargoAPI.Tests/CargoAPI.Tests.csproj
+dotnet test CargoAPI.Tests/CargoAPI.Tests.csproj --configuration Release
+```
+
+The tests use mocks for repositories and logging so the core business behavior can be validated without SQL Server.
+
 ## Quick start
 
 ### Requirements
 
-- .NET 6 SDK
+- .NET 6 SDK for the current repository state
 - SQL Server LocalDB, Express or full SQL Server
 - `dotnet-ef`
 
@@ -147,7 +172,7 @@ dotnet tool install --global dotnet-ef
 
 ### Configure the database
 
-Set `DefaultConnection` in `CargoAPI.API/appsettings.json` for your environment.
+Set `DefaultConnection` in `CargoAPI.API/appsettings.json` for your local environment. Do not commit production credentials.
 
 Example LocalDB configuration:
 
@@ -218,7 +243,7 @@ Create an order:
 }
 ```
 
-For the example configuration above, the calculated carrier cost is `44 TRY`.
+For the documented example above, the calculated carrier cost is `44 TRY`.
 
 ## Validation and failure handling
 
@@ -234,24 +259,25 @@ Unhandled failures pass through global exception middleware so the API returns a
 
 ## CI
 
-Every push and pull request to `main` runs:
+Every push and pull request to `main` performs restore, Release build and unit tests.
 
 ```bash
 dotnet restore CargoAPI.sln
+dotnet restore CargoAPI.Tests/CargoAPI.Tests.csproj
 dotnet build CargoAPI.sln --configuration Release --no-restore
+dotnet test CargoAPI.Tests/CargoAPI.Tests.csproj --configuration Release --no-restore
 ```
-
-See `.github/workflows/ci.yml`.
 
 ## Engineering roadmap
 
-- Add unit tests for carrier-selection edge cases
+- Upgrade the runtime to a currently supported LTS target
 - Add integration tests for order and report endpoints
 - Add Docker-based SQL Server development environment
+- Resolve and test below-range/gap pricing semantics
 - Move API contracts toward explicit request/response DTOs where needed
-- Upgrade the runtime from .NET 6 to a currently supported LTS target
-- Add authentication/authorization before any internet-facing deployment
+- Add authentication/authorization before internet-facing deployment
 - Add structured logging and request correlation
+- Add test coverage reporting
 
 ## Security
 
@@ -259,7 +285,7 @@ This repository is a portfolio/reference project and should not be exposed to th
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Pull requests use the repository PR checklist and should include validation evidence.
 
 ---
 
