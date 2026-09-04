@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a focused API, domain, or operational improvement
+title: "feat: "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: What domain, API, reliability, or developer-experience problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior and any API or data-model impact.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional trade-offs, compatibility concerns, or implementation notes.
