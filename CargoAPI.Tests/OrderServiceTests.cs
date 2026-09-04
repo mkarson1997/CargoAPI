@@ -29,6 +29,50 @@ public class OrderServiceTests
         _orders.Verify(x => x.SaveAsync(), Times.Never);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(10)]
+    public async Task AddAsync_WhenDesiIsExactlyOnRangeBoundary_UsesMatchingConfiguration(int orderDesi)
+    {
+        var service = CreateService();
+        Order? persisted = null;
+
+        _configs
+            .Setup(x => x.GetByDesiRangeAsync(orderDesi))
+            .ReturnsAsync(new List<CarrierConfiguration>
+            {
+                new()
+                {
+                    CarrierId = 3,
+                    CarrierMinDesi = 1,
+                    CarrierMaxDesi = 10,
+                    CarrierCost = 20m,
+                    Carrier = new Carrier
+                    {
+                        CarrierId = 3,
+                        CarrierName = "Boundary Carrier",
+                        CarrierIsActive = true,
+                        CarrierPlusDesiCost = 5
+                    }
+                }
+            });
+
+        _orders
+            .Setup(x => x.AddAsync(It.IsAny<Order>()))
+            .Callback<Order>(order => persisted = order)
+            .Returns(Task.CompletedTask);
+        _orders.Setup(x => x.SaveAsync()).Returns(Task.CompletedTask);
+
+        var result = await service.AddAsync(orderDesi);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(orderDesi, persisted!.OrderDesi);
+        Assert.Equal(3, persisted.CarrierId);
+        Assert.Equal(20m, persisted.OrderCarrierCost);
+        Assert.Contains("20", result);
+        _configs.Verify(x => x.GetClosestConfigAsync(It.IsAny<int>()), Times.Never);
+    }
+
     [Fact]
     public async Task AddAsync_WhenMultipleConfigurationsMatch_SelectsCheapestCarrier()
     {
