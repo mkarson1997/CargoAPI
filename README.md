@@ -2,26 +2,28 @@
 
 [![CI](https://github.com/mkarson1997/CargoAPI/actions/workflows/ci.yml/badge.svg)](https://github.com/mkarson1997/CargoAPI/actions/workflows/ci.yml)
 
-A layered .NET Web API that selects the most cost-effective cargo carrier for an order based on dimensional-weight rules, persists operational data, and generates recurring daily carrier-cost reports in the background.
+A layered .NET 10 Web API that selects the most cost-effective cargo carrier for an order based on dimensional-weight rules, persists operational data in SQL Server, and generates recurring carrier-cost reports with Hangfire.
 
-This repository is maintained as a backend engineering case study: business rules live outside controllers, persistence is isolated behind repositories, validation protects domain invariants, Hangfire handles recurring work, and automated tests protect core pricing behavior.
-
-> **Runtime note:** the current code targets .NET 6. A tracked portfolio-hardening issue covers migration to a supported LTS runtime and containerized local development.
+This repository is maintained as a backend engineering case study: business rules live outside controllers, persistence is isolated behind repositories, validation protects domain invariants, automated tests cover core pricing behavior, and the complete development stack can be started with Docker Compose.
 
 ## Engineering highlights
 
+- .NET 10 LTS and Entity Framework Core 10
 - N-tier architecture with API, Business, DataAccess and Entities projects
 - Carrier selection based on configurable desi ranges and pricing rules
-- Entity Framework Core with SQL Server and Code First migrations
+- SQL Server persistence with EF Core Code First migrations
 - Hangfire recurring background jobs and dashboard
 - Idempotent-style daily carrier report upsert flow
 - Swagger/OpenAPI development interface
 - Global exception handling with safe JSON error responses
-- Input validation for names, dimensions and pricing values
+- Liveness and database-readiness endpoints
+- Optional migration-on-start behavior controlled by configuration
 - Automated xUnit tests for core `OrderService` behavior
 - Moq-based dependency isolation in business-layer tests
 - GitHub Actions build + unit-test validation
-- Security, contribution and pull-request documentation
+- Multi-stage production-style Docker image
+- Docker Compose development stack with SQL Server health gating
+- Security, contribution, architecture and domain-rule documentation
 
 ## Architecture
 
@@ -30,7 +32,7 @@ Client
   │
   ▼
 CargoAPI.API
-  │  HTTP / validation / middleware / Swagger
+  │  HTTP / validation / middleware / Swagger / health
   ▼
 CargoAPI.Business
   │  application and carrier-selection rules
@@ -56,10 +58,20 @@ CargoAPI.sln
 ├── CargoAPI.Tests
 ├── database/
 ├── docs/
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example
+├── global.json
 ├── .github/workflows/ci.yml
 ├── SECURITY.md
 └── CONTRIBUTING.md
 ```
+
+See also:
+
+- [Architecture notes](docs/ARCHITECTURE.md)
+- [Domain rules](docs/DOMAIN_RULES.md)
+- [Portfolio hardening roadmap](docs/PORTFOLIO_UPGRADE.md)
 
 ## Core business rule
 
@@ -69,9 +81,9 @@ When an order is created, the API receives `orderDesi` and evaluates active carr
 
 The system selects the lowest-priced eligible carrier configuration.
 
-### Case 2: desi is outside every configured range
+### Case 2: desi is above every configured range
 
-The current implementation chooses the configuration whose `CarrierMaxDesi` is closest and applies the extra-desi calculation:
+The documented example applies the extra-desi calculation:
 
 ```text
 finalPrice = carrierPrice + (carrierPlusDesiCost × difference)
@@ -88,7 +100,7 @@ Extra desi price:      4 TRY
 32 + (4 × 3) = 44 TRY
 ```
 
-The behavior for orders below every configured range and for gaps between ranges is intentionally tracked as an explicit domain-rule decision before changing production behavior.
+Behavior for orders below every configured range and gaps between ranges remains an explicit product/domain decision rather than being silently frozen by tests. See [issue #3](https://github.com/mkarson1997/CargoAPI/issues/3).
 
 ## Background reporting
 
@@ -138,64 +150,116 @@ This keeps reporting work outside the request/response path and demonstrates a b
 | `GET` | `/api/CarrierReports` | List carrier reports |
 | `POST` | `/api/CarrierReports/generate` | Trigger report generation manually |
 
+## Health endpoints
+
+| Route | Meaning |
+|---|---|
+| `GET /health/live` | Process is running and HTTP is responsive |
+| `GET /health/ready` | API can connect to SQL Server |
+
+The readiness endpoint returns HTTP `503` when the database cannot be reached, making it suitable for container/orchestrator readiness checks.
+
 ## Automated tests
 
-The `CargoAPI.Tests` project currently protects the most important `OrderService` behaviors:
+`CargoAPI.Tests` protects key `OrderService` behavior including:
 
-- non-positive desi is rejected without persistence,
-- the cheapest carrier is selected when multiple ranges match,
-- extra-desi pricing is calculated for the documented above-range case,
-- no order is persisted when no carrier configuration exists.
+- non-positive desi rejection without persistence,
+- exact lower and upper range boundaries,
+- cheapest-carrier selection when multiple ranges match,
+- documented above-range extra-desi pricing,
+- missing configuration failure without persistence.
 
 Run the suite:
 
 ```bash
-dotnet restore CargoAPI.Tests/CargoAPI.Tests.csproj
+dotnet restore CargoAPI.sln
 dotnet test CargoAPI.Tests/CargoAPI.Tests.csproj --configuration Release
 ```
 
-The tests use mocks for repositories and logging so the core business behavior can be validated without SQL Server.
+The tests use mocks for repositories and logging so business behavior can be validated without SQL Server.
 
-## Quick start
+## Quick start: Docker Compose
 
 ### Requirements
 
-- .NET 6 SDK for the current repository state
-- SQL Server LocalDB, Express or full SQL Server
-- `dotnet-ef`
+- Docker Desktop or Docker Engine with Compose support
 
-Install EF tooling:
+Create your local environment file:
 
 ```bash
-dotnet tool install --global dotnet-ef
+cp .env.example .env
 ```
 
-### Configure the database
+On Windows PowerShell:
 
-Set `DefaultConnection` in `CargoAPI.API/appsettings.json` for your local environment. Do not commit production credentials.
-
-Example LocalDB configuration:
-
-```json
-{
-  "ConnectionStrings": {
-    "DefaultConnection": "Server=(localdb)\\MSSQLLocalDB;Database=CargoDb;Trusted_Connection=True;TrustServerCertificate=True;"
-  }
-}
+```powershell
+Copy-Item .env.example .env
 ```
 
-Apply migrations:
+Edit `.env` and replace the example SQL Server password with a strong local-only password.
+
+Start the complete stack:
+
+```bash
+docker compose up --build
+```
+
+Compose waits for SQL Server to become healthy before starting the API. The API receives its connection string through environment variables and applies EF Core migrations because the Compose environment explicitly sets:
+
+```text
+Database__ApplyMigrations=true
+```
+
+Useful local URLs:
+
+```text
+Swagger:    http://localhost:8080/swagger
+Hangfire:   http://localhost:8080/hangfire
+Liveness:   http://localhost:8080/health/live
+Readiness:  http://localhost:8080/health/ready
+SQL Server: localhost,14333
+```
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+Remove the local SQL Server volume as well:
+
+```bash
+docker compose down -v
+```
+
+## Quick start: local .NET SDK
+
+### Requirements
+
+- .NET 10 SDK
+- SQL Server LocalDB, Express or another SQL Server instance
+- `dotnet-ef` 10.x for migration commands
+
+The repository includes `global.json` to keep local and CI SDK selection in the .NET 10 toolchain.
+
+Install EF tooling if needed:
+
+```bash
+dotnet tool install --global dotnet-ef --version 10.*
+```
+
+The committed `appsettings.json` contains only a LocalDB development connection string and does not contain a database password. You can override it without editing tracked files:
+
+```text
+ConnectionStrings__DefaultConnection=<your connection string>
+```
+
+Apply migrations manually:
 
 ```bash
 dotnet ef database update \
   --project CargoAPI.DataAccess \
   --startup-project CargoAPI.API
-```
-
-Or use the idempotent SQL bootstrap script:
-
-```bash
-sqlcmd -S "(localdb)\MSSQLLocalDB" -i database/CargoDb_Create.sql
 ```
 
 Run the API:
@@ -204,12 +268,7 @@ Run the API:
 dotnet run --project CargoAPI.API
 ```
 
-Development interfaces:
-
-```text
-Swagger:  http://localhost:5246/swagger
-Hangfire: http://localhost:5246/hangfire
-```
+`Database:ApplyMigrations` is `false` by default. Automatic migration is opt-in and enabled by the local Docker Compose configuration only.
 
 ## Example workflow
 
@@ -259,33 +318,35 @@ Unhandled failures pass through global exception middleware so the API returns a
 
 ## CI
 
-Every push and pull request to `main` performs restore, Release build and unit tests.
+Every push and pull request to `main` uses the .NET 10 SDK and performs restore, Release build and unit tests:
 
 ```bash
 dotnet restore CargoAPI.sln
-dotnet restore CargoAPI.Tests/CargoAPI.Tests.csproj
 dotnet build CargoAPI.sln --configuration Release --no-restore
-dotnet test CargoAPI.Tests/CargoAPI.Tests.csproj --configuration Release --no-restore
+dotnet test CargoAPI.Tests/CargoAPI.Tests.csproj --configuration Release --no-build
 ```
 
 ## Engineering roadmap
 
-- Upgrade the runtime to a currently supported LTS target
-- Add integration tests for order and report endpoints
-- Add Docker-based SQL Server development environment
+- Add API/database integration tests
 - Resolve and test below-range/gap pricing semantics
 - Move API contracts toward explicit request/response DTOs where needed
 - Add authentication/authorization before internet-facing deployment
 - Add structured logging and request correlation
-- Add test coverage reporting
+- Add coverage reporting
+- Add container image build validation to CI
 
 ## Security
 
-This repository is a portfolio/reference project and should not be exposed to the public internet without deployment hardening and authentication. See [SECURITY.md](SECURITY.md) for vulnerability reporting guidance.
+This repository is a portfolio/reference project and should not be exposed to the public internet without authentication and deployment hardening. `.env` is ignored and should never be committed. See [SECURITY.md](SECURITY.md) for vulnerability reporting guidance.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Pull requests use the repository PR checklist and should include validation evidence.
+
+## License
+
+Project-authored source and documentation are available under the MIT License. Third-party packages and tooling retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 
