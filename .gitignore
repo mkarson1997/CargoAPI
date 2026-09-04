@@ -17,6 +17,9 @@ obj/
 ## Rider
 .idea/
 
+## Local environment
+.env
+
 ## OS
 Thumbs.db
 .DS_Store

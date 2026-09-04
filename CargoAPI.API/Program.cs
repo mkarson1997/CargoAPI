@@ -7,8 +7,11 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(connectionString));
 
 builder.Services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
 builder.Services.AddScoped<ICarrierConfigurationRepository, CarrierConfigurationRepository>();
@@ -18,37 +21,60 @@ builder.Services.AddScoped<ICarrierConfigurationService, CarrierConfigurationSer
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<ICarrierReportService, CarrierReportService>();
 
-// Hangfire configuration using same SQL Server connection
 builder.Services.AddHangfire(config =>
 {
-    config.UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection"));
+    config.UseSqlServerStorage(connectionString);
 });
 builder.Services.AddHangfireServer();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddHealthChecks();
 
 var app = builder.Build();
+
+if (builder.Configuration.GetValue<bool>("Database:ApplyMigrations"))
+{
+    using var scope = app.Services.CreateScope();
+    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await dbContext.Database.MigrateAsync();
+}
 
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    app.UseHangfireDashboard("/hangfire");
 }
 
-// Global exception handling - must be before other middleware
 app.UseMiddleware<GlobalExceptionMiddleware>();
 
-// Hangfire Dashboard
-app.UseHangfireDashboard("/hangfire");
-
-// Register recurring job - runs every hour
 RecurringJob.AddOrUpdate<ICarrierReportService>(
     "carrier-reports",
     service => service.GenerateReportsAsync(),
     Cron.Hourly,
     new RecurringJobOptions { TimeZone = TimeZoneInfo.Local });
+
+app.MapGet("/health/live", () => Results.Ok(new
+{
+    status = "ok",
+    service = "CargoAPI"
+}));
+
+app.MapGet("/health/ready", async (AppDbContext dbContext, CancellationToken cancellationToken) =>
+{
+    if (await dbContext.Database.CanConnectAsync(cancellationToken))
+    {
+        return Results.Ok(new
+        {
+            status = "ready",
+            database = "reachable"
+        });
+    }
+
+    return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+});
 
 app.MapControllers();
 
