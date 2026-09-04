@@ -45,11 +45,10 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    app.UseHangfireDashboard("/hangfire");
 }
 
 app.UseMiddleware<GlobalExceptionMiddleware>();
-
-app.UseHangfireDashboard("/hangfire");
 
 RecurringJob.AddOrUpdate<ICarrierReportService>(
     "carrier-reports",
