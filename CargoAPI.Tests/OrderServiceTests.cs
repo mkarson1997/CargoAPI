@@ -3,6 +3,7 @@ using CargoAPI.DataAccess.Repositories;
 using CargoAPI.Entities;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Xunit;
 
 namespace CargoAPI.Tests;
 
