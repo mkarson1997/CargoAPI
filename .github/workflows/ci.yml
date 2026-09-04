@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -31,3 +31,11 @@ jobs:
 
       - name: Test
         run: dotnet test CargoAPI.Tests/CargoAPI.Tests.csproj --configuration Release --no-build --verbosity normal
+
+      - name: Validate Docker Compose configuration
+        env:
+          MSSQL_SA_PASSWORD: CI_Only_Password_2026!
+        run: docker compose config --quiet
+
+      - name: Build API container image
+        run: docker build --tag cargoapi:ci .
