@@ -6,11 +6,10 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
-
 jobs:
   build-and-test:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -32,9 +31,14 @@ jobs:
       - name: Test
         run: dotnet test CargoAPI.Tests/CargoAPI.Tests.csproj --configuration Release --no-build --verbosity normal
 
+      - name: Create ephemeral SQL Server password for compose validation
+        shell: bash
+        run: |
+          password="Aa1!$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          echo "MSSQL_SA_PASSWORD=$password" >> "$GITHUB_ENV"
+
       - name: Validate Docker Compose configuration
-        env:
-          MSSQL_SA_PASSWORD: CI_Only_Password_2026!
         run: docker compose config --quiet
 
       - name: Build API container image
